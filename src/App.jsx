@@ -2,37 +2,29 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import kuromoji from "kuromoji";
 import "./App.css";
 
-/* ─── 音韻テーブル ─── */
+/* ─── 研究ベースの音色マッピング ─── */
 
-// 調音位置 → 色相 (0–360)
-const PLACE = {
-  bilabial: 0,      // 唇音: ま・ぱ・ば → 赤
-  alveolar: 60,     // 歯茎音: た・な・さ → 黄
-  postalveolar: 120, // 後部歯茎: し・ち・じ → 緑
-  palatal: 180,     // 硬口蓋: や → シアン
-  velar: 240,       // 軟口蓋: か・が → 青
-  glottal: 300,     // 声門: は → マゼンタ
-  vowel: null,      // 母音は別処理
+// 母音 → 基調色 [H, S, L]
+// 研究知見: a=赤, i=明るい黄/白, u=暗い青, e=黄緑, o=暗い紺/黒
+const VOWEL_COLORS = {
+  a: [0,    0.85, 0.55],  // 赤 — 最も一貫した知見
+  i: [50,   0.75, 0.72],  // 明るい黄 — 前舌・閉=明るく黄寄り
+  u: [225,  0.65, 0.30],  // 暗い青 — 後舌・閉=暗く青
+  e: [100,  0.60, 0.52],  // 黄緑 — 前舌・中=緑〜黄
+  o: [235,  0.45, 0.22],  // 暗い紺 — 後舌・中=暗い
 };
 
-// 調音方法 → ソノリティ (0–1, 高いほど響く)
-const MANNER = {
-  stop: 0.15,       // 破裂音
-  affricate: 0.25,  // 破擦音
-  fricative: 0.35,  // 摩擦音
-  liquid: 0.6,      // 流音・弾き音
-  nasal: 0.75,      // 鼻音
-  glide: 0.85,      // 半母音
-  vowel: 1.0,       // 母音
-};
-
-// 母音の特徴: [前後 0=前–1=後, 開口度 0=閉–1=開]
-const VOWELS = {
-  a: [0.5, 1.0],
-  i: [0.0, 0.0],
-  u: [1.0, 0.0],
-  e: [0.0, 0.5],
-  o: [1.0, 0.5],
+// 子音の性質 → 色の修飾
+// 阻害音(破裂・摩擦)=冷たく鋭い、共鳴音(鼻・流・半母音)=暖かく柔らかい
+const CONSONANT_MOD = {
+  // [色相シフト, 彩度倍率, 明度シフト]
+  stop:        [0,    0.85, -0.05],  // 破裂音: やや暗く、彩度控えめ
+  affricate:   [5,    0.80, -0.03],  // 破擦音: 破裂に近い
+  fricative:   [10,   0.75, +0.05],  // 摩擦音: やや明るく、くすんだ
+  nasal:       [-10,  1.10, +0.08],  // 鼻音: 暖かく柔らかい、やや明るく鮮やか
+  liquid:      [-5,   1.05, +0.05],  // 流音: わずかに暖色寄り
+  glide:       [0,    1.00, +0.03],  // 半母音: ほぼ母音のまま
+  vowel:       [0,    1.00, 0],      // 純母音: そのまま
 };
 
 // 五十音 → 音韻素性マッピング
@@ -308,36 +300,28 @@ function phonemeToColor(info) {
   if (!info) return [80, 80, 80, 180];
 
   // 特殊モーラ
-  if (info.special === "geminate") return [20, 20, 20, 255];
-  if (info.special === "moraic_nasal") return [...hslToRgb(45/360, 0.4, 0.45), 255];
-  if (info.special === "long") return [200, 200, 220, 120];
+  if (info.special === "geminate") return [15, 15, 20, 255];     // 促音 → ほぼ黒（沈黙の圧縮）
+  if (info.special === "moraic_nasal") return [...hslToRgb(30/360, 0.45, 0.40), 255]; // ん → 暗い暖色
+  if (info.special === "long") return [180, 185, 200, 100];      // 長音 → 淡く透ける
 
-  let hue;
-  if (info.place === "vowel" && info.vowel) {
-    const [front] = VOWELS[info.vowel];
-    hue = front * 270 + 20;
-  } else if (info.place && PLACE[info.place] != null) {
-    hue = PLACE[info.place];
-    if (info.vowel && VOWELS[info.vowel]) {
-      const [front] = VOWELS[info.vowel];
-      hue += (front - 0.5) * 30;
-    }
-  } else {
-    hue = 0;
+  // 母音の基調色を取得
+  const vowelColor = info.vowel ? VOWEL_COLORS[info.vowel] : VOWEL_COLORS["a"];
+  let [h, s, l] = vowelColor;
+
+  // 子音で修飾
+  const mod = CONSONANT_MOD[info.manner] || CONSONANT_MOD["vowel"];
+  h = ((h + mod[0]) % 360 + 360) % 360;
+  s = Math.min(1, Math.max(0, s * mod[1]));
+  l = Math.min(0.85, Math.max(0.12, l + mod[2]));
+
+  // 有声/無声: 濁音はより暗く重い色に
+  const alpha = info.voiced ? 255 : 210;
+  if (info.voiced && info.manner !== "vowel" && info.manner !== "glide" && info.manner !== "nasal") {
+    l = Math.max(0.12, l - 0.08);
+    s = Math.min(1, s * 0.90);
   }
 
-  const sonority = MANNER[info.manner] || 0.5;
-  const saturation = 0.3 + sonority * 0.6;
-
-  let lightness = 0.45;
-  if (info.vowel && VOWELS[info.vowel]) {
-    const [, openness] = VOWELS[info.vowel];
-    lightness = 0.3 + openness * 0.35;
-  }
-
-  const alpha = info.voiced ? 255 : 200;
-
-  return [...hslToRgb(((hue % 360) + 360) % 360 / 360, saturation, lightness), alpha];
+  return [...hslToRgb(h / 360, s, l), alpha];
 }
 
 // 読みの文字列（ひらがな配列）から色を決定
@@ -369,25 +353,25 @@ function readingToColor(readingChars) {
 /* ─── 凡例データ ─── */
 
 const LEGEND_ITEMS = [
-  { label: "色相 = 調音位置", items: [
-    { color: hslToRgb(0/360, 0.7, 0.5), text: "唇音 (ま・ぱ・ば)" },
-    { color: hslToRgb(60/360, 0.7, 0.5), text: "歯茎音 (た・な・さ)" },
-    { color: hslToRgb(120/360, 0.7, 0.5), text: "後部歯茎 (し・ち)" },
-    { color: hslToRgb(180/360, 0.7, 0.5), text: "硬口蓋 (や・に)" },
-    { color: hslToRgb(240/360, 0.7, 0.5), text: "軟口蓋 (か・が)" },
-    { color: hslToRgb(300/360, 0.7, 0.5), text: "声門 (は・へ・ほ)" },
+  { label: "母音 = 基調色", items: [
+    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1], VOWEL_COLORS.a[2]), text: "あ段 → 赤" },
+    { color: hslToRgb(VOWEL_COLORS.i[0]/360, VOWEL_COLORS.i[1], VOWEL_COLORS.i[2]), text: "い段 → 明るい黄" },
+    { color: hslToRgb(VOWEL_COLORS.u[0]/360, VOWEL_COLORS.u[1], VOWEL_COLORS.u[2]), text: "う段 → 暗い青" },
+    { color: hslToRgb(VOWEL_COLORS.e[0]/360, VOWEL_COLORS.e[1], VOWEL_COLORS.e[2]), text: "え段 → 黄緑" },
+    { color: hslToRgb(VOWEL_COLORS.o[0]/360, VOWEL_COLORS.o[1], VOWEL_COLORS.o[2]), text: "お段 → 暗い紺" },
   ]},
-  { label: "彩度 = ソノリティ", items: [
-    { color: hslToRgb(60/360, 0.3, 0.5), text: "低：破裂音 (か・た)" },
-    { color: hslToRgb(60/360, 0.9, 0.5), text: "高：母音・鼻音 (あ・な)" },
+  { label: "子音 = 色の修飾", items: [
+    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85, VOWEL_COLORS.a[2]-0.05), text: "阻害音 (か・た・さ): 硬く冷たく" },
+    { color: hslToRgb((VOWEL_COLORS.a[0]-10)/360, VOWEL_COLORS.a[1]*1.10, VOWEL_COLORS.a[2]+0.08), text: "共鳴音 (な・ま・ら): 柔らかく暖かく" },
   ]},
-  { label: "明度 = 開口度", items: [
-    { color: hslToRgb(60/360, 0.7, 0.3), text: "閉：い・う段" },
-    { color: hslToRgb(60/360, 0.7, 0.65), text: "開：あ段" },
+  { label: "濁音 = 暗く重い", items: [
+    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85, VOWEL_COLORS.a[2]-0.05), text: "清音 (か・さ・た)" },
+    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85*0.90, VOWEL_COLORS.a[2]-0.05-0.08), text: "濁音 (が・ざ・だ)" },
   ]},
-  { label: "透明度 = 有声/無声", items: [
-    { color: hslToRgb(240/360, 0.7, 0.5), text: "不透明：有声 (が)" },
-    { color: hslToRgb(240/360, 0.7, 0.5), text: "半透明：無声 (か)", alpha: 200 },
+  { label: "特殊モーラ", items: [
+    { color: [15, 15, 20], text: "っ → 沈黙の黒" },
+    { color: hslToRgb(30/360, 0.45, 0.40), text: "ん → 暗い暖色" },
+    { color: [180, 185, 200], text: "ー → 淡い半透明", alpha: 100 },
   ]},
 ];
 
@@ -530,7 +514,7 @@ export default function App() {
           <button className="save-btn" onClick={save}>PNG保存</button>
         </div>
         <div className="desc">
-          <p>各文字の発音を音声学的に分析し、4つの次元で色にマッピングします。漢字は形態素解析で読みを取得し、その音韻から色を決定します。</p>
+          <p>共感覚・音象徴研究に基づき、母音が色の基調を決め、子音の性質が修飾します。漢字は形態素解析で読みを取得。</p>
         </div>
         <div className="legend">
           {LEGEND_ITEMS.map((group) => (
