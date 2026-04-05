@@ -389,21 +389,28 @@ export default function App() {
   const colsRef = useRef(0);
   const tokenizerRef = useRef(null);
 
-  // kuromoji初期化
+  // kuromoji初期化 — CDNから辞書を取得
   useEffect(() => {
-    import("kuromoji").then((mod) => {
-      const kuromojiLib = mod.default || mod;
-      kuromojiLib.builder({ dicPath: "/dict/" }).build((err, tokenizer) => {
-        if (err) {
-          console.error("kuromoji init error:", err);
-          setTokenizerStatus("failed");
-          return;
-        }
+    import("@patdx/kuromoji").then((kuromoji) => {
+      const loader = {
+        async loadArrayBuffer(url) {
+          // .gz を除去してCDNから非圧縮版を取得
+          const filename = url.replace(/^.*\//, "").replace(".gz", "");
+          const cdnUrl = `https://cdn.jsdelivr.net/npm/@aiktb/kuromoji@1.0.2/dict/${filename}`;
+          const res = await fetch(cdnUrl);
+          if (!res.ok) throw new Error(`Failed to fetch ${cdnUrl}: ${res.status}`);
+          return res.arrayBuffer();
+        },
+      };
+      new kuromoji.TokenizerBuilder({ loader }).build().then((tokenizer) => {
         tokenizerRef.current = tokenizer;
         setTokenizerStatus("ready");
+      }).catch((e) => {
+        console.error("kuromoji build error:", e);
+        setTokenizerStatus("failed");
       });
     }).catch((e) => {
-      console.error("kuromoji load error:", e);
+      console.error("kuromoji import error:", e);
       setTokenizerStatus("failed");
     });
   }, []);
