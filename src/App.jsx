@@ -189,55 +189,53 @@ function kataToHira(str) {
 
 /* ─── 漢字→読み変換 (kuromoji) ─── */
 
+// word_positionに依存せず、トークンの順番で読みを割り当てる
 function textToReadings(tokens, text) {
-  const chars = [...text];
-  const readingMap = new Array(chars.length).fill(null);
+  const result = [];
 
   for (const token of tokens) {
     const surface = token.surface_form;
     const reading = token.reading;
-    const start = token.word_position - 1;
+    const surfaceChars = [...surface];
 
     if (!reading || reading === "*") {
-      // 読みなし: そのまま
-      [...surface].forEach((ch, i) => {
-        const pos = start + i;
-        if (pos < readingMap.length) readingMap[pos] = [ch];
-      });
+      // 読みなし: 各文字をそのまま
+      for (const ch of surfaceChars) {
+        result.push([ch]);
+      }
       continue;
     }
 
     const hiraReading = kataToHira(reading);
-    const surfaceChars = [...surface];
     const readingChars = [...hiraReading];
 
-    // 全て非漢字（ひらがな/カタカナ）の場合: 1対1で割り当て
+    // 全て非漢字の場合: 1対1
     const hasKanji = surfaceChars.some(ch => {
       const cp = ch.codePointAt(0);
       return cp >= 0x4E00 && cp <= 0x9FFF;
     });
 
     if (!hasKanji) {
-      surfaceChars.forEach((ch, i) => {
-        const pos = start + i;
-        if (pos < readingMap.length) {
-          readingMap[pos] = [PHONEME_MAP[ch] ? ch : kataToHira(ch)];
-        }
-      });
+      for (const ch of surfaceChars) {
+        const hira = kataToHira(ch);
+        result.push([PHONEME_MAP[hira] ? hira : ch]);
+      }
       continue;
     }
 
-    // 漢字を含む場合: 読み全体をまとめて均等分配
-    const perChar = Math.max(1, Math.ceil(readingChars.length / surfaceChars.length));
-    surfaceChars.forEach((ch, i) => {
-      const pos = start + i;
-      if (pos >= readingMap.length) return;
-      const slice = readingChars.slice(i * perChar, (i + 1) * perChar);
-      readingMap[pos] = slice.length > 0 ? slice : readingChars.slice(-1);
-    });
+    // 漢字を含む: 読みを均等分配
+    if (surfaceChars.length === 1) {
+      result.push(readingChars);
+    } else {
+      const perChar = Math.max(1, Math.ceil(readingChars.length / surfaceChars.length));
+      for (let i = 0; i < surfaceChars.length; i++) {
+        const slice = readingChars.slice(i * perChar, (i + 1) * perChar);
+        result.push(slice.length > 0 ? slice : readingChars.slice(-1));
+      }
+    }
   }
 
-  return readingMap.map((reading, i) => reading || [chars[i]]);
+  return result;
 }
 
 /* ─── 色変換 ─── */
@@ -380,7 +378,7 @@ const LEGEND_ITEMS = [
 /* ─── App ─── */
 
 export default function App() {
-  const [text, setText] = useState("ことばの音には色がある。静かな鼻音は深く響き、鋭い破裂音は閃光のように走る。");
+  const [text, setText] = useState("霞立ち木の芽も春の雪降れば花なき里も花ぞ散りける");
   const [pixelSize, setPixelSize] = useState(8);
   const [info, setInfo] = useState("");
   const [hoveredChar, setHoveredChar] = useState(null);
@@ -421,6 +419,11 @@ export default function App() {
       try {
         const tokens = tokenizerRef.current.tokenize(joinedText);
         readings = textToReadings(tokens, joinedText);
+        // トークン展開結果と元文字数が合わない場合はフォールバック
+        if (readings.length !== rawChars.length) {
+          console.warn("reading length mismatch:", readings.length, "vs", rawChars.length);
+          readings = rawChars.map(ch => [ch]);
+        }
       } catch (e) {
         console.error("tokenize error:", e);
         readings = rawChars.map(ch => [ch]);
@@ -498,7 +501,10 @@ export default function App() {
           <div className="loading">辞書を読み込み中...</div>
         )}
         {tokenizerStatus === "failed" && (
-          <div className="loading">辞書の読み込みに失敗。ひらがな・カタカナのみ対応。</div>
+          <div className="loading" style={{color:"#c44"}}>辞書の読み込みに失敗。ひらがな・カタカナのみ対応。</div>
+        )}
+        {tokenizerStatus === "ready" && (
+          <div className="loading" style={{color:"#4a4"}}>漢字の読み解析: 有効</div>
         )}
         <textarea
           value={text}
