@@ -33,6 +33,14 @@ header p {
   margin-top: 4px;
 }
 
+.loading {
+  font-size: 11px;
+  color: #555;
+  letter-spacing: 2px;
+  padding: 8px 0;
+  margin-bottom: 0.5rem;
+}
+
 textarea {
   width: 100%;
   background: #111;
