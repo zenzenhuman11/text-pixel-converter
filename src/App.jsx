@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import kuromoji from "kuromoji";
 import "./App.css";
 
 /* ─── 研究ベースの音色マッピング ─── */
@@ -389,14 +388,21 @@ export default function App() {
   const colsRef = useRef(0);
   const tokenizerRef = useRef(null);
 
-  // kuromoji初期化
+  // kuromoji初期化 (dynamic import でブラウザ互換性を確保)
   useEffect(() => {
-    kuromoji.builder({ dicPath: "/dict/" }).build((err, tokenizer) => {
-      if (err) {
-        console.error("kuromoji init error:", err);
-        return;
-      }
-      tokenizerRef.current = tokenizer;
+    import("kuromoji").then((mod) => {
+      const kuromojiLib = mod.default || mod;
+      kuromojiLib.builder({ dicPath: "/dict/" }).build((err, tokenizer) => {
+        if (err) {
+          console.error("kuromoji init error:", err);
+          setTokenizerReady(true);
+          return;
+        }
+        tokenizerRef.current = tokenizer;
+        setTokenizerReady(true);
+      });
+    }).catch((e) => {
+      console.error("kuromoji load error:", e);
       setTokenizerReady(true);
     });
   }, []);
