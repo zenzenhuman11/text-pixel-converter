@@ -6,24 +6,33 @@ import "./App.css";
 // 母音 → 基調色 [H, S, L]
 // 研究知見: a=赤, i=明るい黄/白, u=暗い青, e=黄緑, o=暗い紺/黒
 const VOWEL_COLORS = {
-  a: [0,    0.85, 0.55],  // 赤 — 最も一貫した知見
-  i: [50,   0.75, 0.72],  // 明るい黄 — 前舌・閉=明るく黄寄り
-  u: [225,  0.65, 0.30],  // 暗い青 — 後舌・閉=暗く青
-  e: [100,  0.60, 0.52],  // 黄緑 — 前舌・中=緑〜黄
-  o: [235,  0.45, 0.22],  // 暗い紺 — 後舌・中=暗い
+  a: [0,    0.85, 0.55],  // 赤
+  i: [50,   0.80, 0.70],  // 明るい黄
+  u: [220,  0.70, 0.35],  // 暗い青
+  e: [95,   0.65, 0.50],  // 黄緑
+  o: [250,  0.50, 0.28],  // 暗い紺
 };
 
-// 子音の性質 → 色の修飾
-// 阻害音(破裂・摩擦)=冷たく鋭い、共鳴音(鼻・流・半母音)=暖かく柔らかい
-const CONSONANT_MOD = {
-  // [色相シフト, 彩度倍率, 明度シフト]
-  stop:        [0,    0.85, -0.05],  // 破裂音: やや暗く、彩度控えめ
-  affricate:   [5,    0.80, -0.03],  // 破擦音: 破裂に近い
-  fricative:   [10,   0.75, +0.05],  // 摩擦音: やや明るく、くすんだ
-  nasal:       [-10,  1.10, +0.08],  // 鼻音: 暖かく柔らかい、やや明るく鮮やか
-  liquid:      [-5,   1.05, +0.05],  // 流音: わずかに暖色寄り
-  glide:       [0,    1.00, +0.03],  // 半母音: ほぼ母音のまま
-  vowel:       [0,    1.00, 0],      // 純母音: そのまま
+// 調音位置 → 色相シフト (母音の基調色からどれだけずらすか)
+const PLACE_HUE_SHIFT = {
+  bilabial:      -20,  // 唇音: 暖色方向へ
+  alveolar:      +15,  // 歯茎音: やや冷色方向
+  postalveolar:  +35,  // 後部歯茎: さらに冷色
+  palatal:       +50,  // 硬口蓋: 大きくシフト
+  velar:         -35,  // 軟口蓋: 暖色方向に大きく
+  glottal:       +70,  // 声門: 大幅にシフト
+  vowel:         0,    // 純母音: シフトなし
+};
+
+// 調音方法 → [彩度倍率, 明度シフト]
+const MANNER_MOD = {
+  stop:        [0.80, -0.06],  // 破裂音: くすんで暗い
+  affricate:   [0.75, -0.04],  // 破擦音
+  fricative:   [0.70, +0.06],  // 摩擦音: くすんで明るい
+  nasal:       [1.15, +0.10],  // 鼻音: 鮮やかで明るい
+  liquid:      [1.05, +0.07],  // 流音: やや鮮やか
+  glide:       [1.00, +0.04],  // 半母音: ほぼ母音
+  vowel:       [1.00, 0],      // 純母音
 };
 
 // 五十音 → 音韻素性マッピング
@@ -180,97 +189,55 @@ function kataToHira(str) {
 
 /* ─── 漢字→読み変換 (kuromoji) ─── */
 
-// テキストを形態素解析し、各元文字に対応する読み（ひらがな）配列を返す
-// 例: "漢字" → ["か","ん","じ"] (元文字 "漢","字" に対して読みの文字を展開)
-function textToReadings(tokens, originalChars) {
-  // トークンから読みマップを構築: 元テキストの各文字位置 → 読みのひらがな文字列
-  const readingMap = new Array(originalChars.length).fill(null);
+function textToReadings(tokens, text) {
+  const chars = [...text];
+  const readingMap = new Array(chars.length).fill(null);
 
   for (const token of tokens) {
     const surface = token.surface_form;
-    const reading = token.reading; // カタカナ
-    const start = token.word_position - 1; // 0-indexed
+    const reading = token.reading;
+    const start = token.word_position - 1;
 
-    if (reading && reading !== "*") {
-      // 読みをひらがなに変換
-      const hiraReading = kataToHira(reading);
-      const surfaceChars = [...surface];
-      const readingChars = [...hiraReading];
+    if (!reading || reading === "*") {
+      // 読みなし: そのまま
+      [...surface].forEach((ch, i) => {
+        const pos = start + i;
+        if (pos < readingMap.length) readingMap[pos] = [ch];
+      });
+      continue;
+    }
 
-      if (surfaceChars.length === 1) {
-        // 1文字のトークン: 読み全体を割り当て
-        if (start < readingMap.length) {
-          readingMap[start] = readingChars;
-        }
-      } else {
-        // 複数文字のトークン: 各文字に読みを分配
-        // ひらがな/カタカナはそのまま、漢字部分に残りの読みを割り当て
-        let readingIdx = 0;
-        for (let i = 0; i < surfaceChars.length; i++) {
-          const pos = start + i;
-          if (pos >= readingMap.length) break;
-          const ch = surfaceChars[i];
-          const isKanji = ch.codePointAt(0) >= 0x4E00 && ch.codePointAt(0) <= 0x9FFF;
+    const hiraReading = kataToHira(reading);
+    const surfaceChars = [...surface];
+    const readingChars = [...hiraReading];
 
-          if (!isKanji) {
-            // ひらがな/カタカナ: そのまま（読み側も1文字進める）
-            readingMap[pos] = [PHONEME_MAP[ch] ? ch : kataToHira(ch)];
-            readingIdx++;
-          } else {
-            // 漢字: 残りの読みから、次の非漢字文字までの分を割り当て
-            // 次のひらがな/カタカナ文字を探して、そこまでの読みを漢字に割り当て
-            let kanjiEnd = i + 1;
-            while (kanjiEnd < surfaceChars.length) {
-              const nextCp = surfaceChars[kanjiEnd].codePointAt(0);
-              if (nextCp < 0x4E00 || nextCp > 0x9FFF) break;
-              kanjiEnd++;
-            }
-            const kanjiCount = kanjiEnd - i;
+    // 全て非漢字（ひらがな/カタカナ）の場合: 1対1で割り当て
+    const hasKanji = surfaceChars.some(ch => {
+      const cp = ch.codePointAt(0);
+      return cp >= 0x4E00 && cp <= 0x9FFF;
+    });
 
-            // 残りのひらがな/カタカナ文字がsurfaceの末尾にいくつあるか
-            let suffixMatchCount = 0;
-            let ri = readingChars.length - 1;
-            let si = surfaceChars.length - 1;
-            while (si > kanjiEnd - 1 && ri >= readingIdx) {
-              const sCh = surfaceChars[si];
-              const sHira = kataToHira(sCh);
-              if (sHira === readingChars[ri]) {
-                suffixMatchCount++;
-                ri--;
-                si--;
-              } else {
-                break;
-              }
-            }
-
-            const readingsForKanji = readingChars.slice(readingIdx, readingChars.length - suffixMatchCount - (surfaceChars.length - kanjiEnd - suffixMatchCount));
-            const perKanji = Math.ceil(readingsForKanji.length / kanjiCount);
-
-            for (let k = 0; k < kanjiCount; k++) {
-              const kPos = start + i + k;
-              if (kPos >= readingMap.length) break;
-              const slice = readingsForKanji.slice(k * perKanji, (k + 1) * perKanji);
-              readingMap[kPos] = slice.length > 0 ? slice : ["あ"];
-            }
-            readingIdx += readingsForKanji.length;
-            i = kanjiEnd - 1; // forのi++で kanjiEnd になる
-          }
-        }
-      }
-    } else {
-      // 読みがないトークン: そのまま
-      const surfaceChars = [...surface];
-      for (let i = 0; i < surfaceChars.length; i++) {
+    if (!hasKanji) {
+      surfaceChars.forEach((ch, i) => {
         const pos = start + i;
         if (pos < readingMap.length) {
-          readingMap[pos] = [surfaceChars[i]];
+          readingMap[pos] = [PHONEME_MAP[ch] ? ch : kataToHira(ch)];
         }
-      }
+      });
+      continue;
     }
+
+    // 漢字を含む場合: 読み全体をまとめて均等分配
+    const perChar = Math.max(1, Math.ceil(readingChars.length / surfaceChars.length));
+    surfaceChars.forEach((ch, i) => {
+      const pos = start + i;
+      if (pos >= readingMap.length) return;
+      const slice = readingChars.slice(i * perChar, (i + 1) * perChar);
+      readingMap[pos] = slice.length > 0 ? slice : readingChars.slice(-1);
+    });
   }
 
-  // null埋めされた部分はそのまま元文字を使う
-  return readingMap.map((reading, i) => reading || [originalChars[i]]);
+  return readingMap.map((reading, i) => reading || [chars[i]]);
 }
 
 /* ─── 色変換 ─── */
@@ -299,32 +266,34 @@ function phonemeToColor(info) {
   if (!info) return [80, 80, 80, 180];
 
   // 特殊モーラ
-  if (info.special === "geminate") return [15, 15, 20, 255];     // 促音 → ほぼ黒（沈黙の圧縮）
-  if (info.special === "moraic_nasal") return [...hslToRgb(30/360, 0.45, 0.40), 255]; // ん → 暗い暖色
-  if (info.special === "long") return [180, 185, 200, 100];      // 長音 → 淡く透ける
+  if (info.special === "geminate") return [15, 15, 20, 255];
+  if (info.special === "moraic_nasal") return [...hslToRgb(30/360, 0.50, 0.42), 255];
+  if (info.special === "long") return [180, 185, 200, 100];
 
-  // 母音の基調色を取得
+  // 母音の基調色
   const vowelColor = info.vowel ? VOWEL_COLORS[info.vowel] : VOWEL_COLORS["a"];
   let [h, s, l] = vowelColor;
 
-  // 子音で修飾
-  const mod = CONSONANT_MOD[info.manner] || CONSONANT_MOD["vowel"];
-  h = ((h + mod[0]) % 360 + 360) % 360;
-  s = Math.min(1, Math.max(0, s * mod[1]));
-  l = Math.min(0.85, Math.max(0.12, l + mod[2]));
+  // 調音位置で色相をシフト
+  const hueShift = PLACE_HUE_SHIFT[info.place] || 0;
+  h = ((h + hueShift) % 360 + 360) % 360;
 
-  // 有声/無声: 濁音はより暗く重い色に
-  const alpha = info.voiced ? 255 : 210;
+  // 調音方法で彩度・明度を修飾
+  const mod = MANNER_MOD[info.manner] || MANNER_MOD["vowel"];
+  s = Math.min(1, Math.max(0.15, s * mod[0]));
+  l = Math.min(0.85, Math.max(0.15, l + mod[1]));
+
+  // 有声/無声
   if (info.voiced && info.manner !== "vowel" && info.manner !== "glide" && info.manner !== "nasal") {
-    l = Math.max(0.12, l - 0.08);
-    s = Math.min(1, s * 0.90);
+    l = Math.max(0.15, l - 0.08);
+    s = Math.min(1, s * 0.85);
   }
+  const alpha = info.voiced ? 255 : 210;
 
   return [...hslToRgb(h / 360, s, l), alpha];
 }
 
 // 読みの文字列（ひらがな配列）から色を決定
-// 複数文字の読みは平均色を返す
 function readingToColor(readingChars) {
   if (!readingChars || readingChars.length === 0) return [80, 80, 80, 180];
 
@@ -351,6 +320,10 @@ function readingToColor(readingChars) {
 
 /* ─── 凡例データ ─── */
 
+function sampleColor(vowel, place, manner, voiced) {
+  return phonemeToColor({ place, manner, voiced, vowel });
+}
+
 const LEGEND_ITEMS = [
   { label: "母音 = 基調色", items: [
     { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1], VOWEL_COLORS.a[2]), text: "あ段 → 赤" },
@@ -359,17 +332,21 @@ const LEGEND_ITEMS = [
     { color: hslToRgb(VOWEL_COLORS.e[0]/360, VOWEL_COLORS.e[1], VOWEL_COLORS.e[2]), text: "え段 → 黄緑" },
     { color: hslToRgb(VOWEL_COLORS.o[0]/360, VOWEL_COLORS.o[1], VOWEL_COLORS.o[2]), text: "お段 → 暗い紺" },
   ]},
-  { label: "子音 = 色の修飾", items: [
-    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85, VOWEL_COLORS.a[2]-0.05), text: "阻害音 (か・た・さ): 硬く冷たく" },
-    { color: hslToRgb((VOWEL_COLORS.a[0]-10)/360, VOWEL_COLORS.a[1]*1.10, VOWEL_COLORS.a[2]+0.08), text: "共鳴音 (な・ま・ら): 柔らかく暖かく" },
+  { label: "子音行 = 色相シフト (あ段の例)", items: [
+    { color: sampleColor("a", "velar", "stop", false).slice(0,3), text: "か行 (軟口蓋)" },
+    { color: sampleColor("a", "alveolar", "fricative", false).slice(0,3), text: "さ行 (歯茎)" },
+    { color: sampleColor("a", "alveolar", "stop", false).slice(0,3), text: "た行 (歯茎)" },
+    { color: sampleColor("a", "alveolar", "nasal", true).slice(0,3), text: "な行 (鼻音)" },
+    { color: sampleColor("a", "glottal", "fricative", false).slice(0,3), text: "は行 (声門)" },
+    { color: sampleColor("a", "bilabial", "nasal", true).slice(0,3), text: "ま行 (唇)" },
   ]},
   { label: "濁音 = 暗く重い", items: [
-    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85, VOWEL_COLORS.a[2]-0.05), text: "清音 (か・さ・た)" },
-    { color: hslToRgb(VOWEL_COLORS.a[0]/360, VOWEL_COLORS.a[1]*0.85*0.90, VOWEL_COLORS.a[2]-0.05-0.08), text: "濁音 (が・ざ・だ)" },
+    { color: sampleColor("a", "velar", "stop", false).slice(0,3), text: "清音 (か)" },
+    { color: sampleColor("a", "velar", "stop", true).slice(0,3), text: "濁音 (が)" },
   ]},
   { label: "特殊モーラ", items: [
     { color: [15, 15, 20], text: "っ → 沈黙の黒" },
-    { color: hslToRgb(30/360, 0.45, 0.40), text: "ん → 暗い暖色" },
+    { color: hslToRgb(30/360, 0.50, 0.42), text: "ん → 暗い暖色" },
     { color: [180, 185, 200], text: "ー → 淡い半透明", alpha: 100 },
   ]},
 ];
@@ -381,66 +358,70 @@ export default function App() {
   const [pixelSize, setPixelSize] = useState(8);
   const [info, setInfo] = useState("");
   const [hoveredChar, setHoveredChar] = useState(null);
-  const [tokenizerReady, setTokenizerReady] = useState(false);
+  const [tokenizerStatus, setTokenizerStatus] = useState("loading");
   const canvasRef = useRef(null);
   const charsRef = useRef([]);
   const readingsRef = useRef([]);
   const colsRef = useRef(0);
   const tokenizerRef = useRef(null);
 
-  // kuromoji初期化 (dynamic import でブラウザ互換性を確保)
+  // kuromoji初期化
   useEffect(() => {
     import("kuromoji").then((mod) => {
       const kuromojiLib = mod.default || mod;
       kuromojiLib.builder({ dicPath: "/dict/" }).build((err, tokenizer) => {
         if (err) {
           console.error("kuromoji init error:", err);
-          setTokenizerReady(true);
+          setTokenizerStatus("failed");
           return;
         }
         tokenizerRef.current = tokenizer;
-        setTokenizerReady(true);
+        setTokenizerStatus("ready");
       });
     }).catch((e) => {
       console.error("kuromoji load error:", e);
-      setTokenizerReady(true);
+      setTokenizerStatus("failed");
     });
   }, []);
 
   const render = useCallback(() => {
-    const chars = [...text].filter(c => c !== "\n");
-    charsRef.current = chars;
-    if (!chars.length || !canvasRef.current) return;
+    const rawChars = [...text].filter(c => c !== "\n");
+    charsRef.current = rawChars;
+    if (!rawChars.length || !canvasRef.current) return;
 
-    // 形態素解析で読みを取得
+    const joinedText = rawChars.join("");
     let readings;
     if (tokenizerRef.current) {
-      const tokens = tokenizerRef.current.tokenize(chars.join(""));
-      readings = textToReadings(tokens, chars);
+      try {
+        const tokens = tokenizerRef.current.tokenize(joinedText);
+        readings = textToReadings(tokens, joinedText);
+      } catch (e) {
+        console.error("tokenize error:", e);
+        readings = rawChars.map(ch => [ch]);
+      }
     } else {
-      // tokenizer未ロード時: ひらがな/カタカナはそのまま、漢字はグレー
-      readings = chars.map(ch => [ch]);
+      readings = rawChars.map(ch => [ch]);
     }
     readingsRef.current = readings;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const cols = Math.ceil(Math.sqrt(chars.length * 1.6));
+    const cols = Math.ceil(Math.sqrt(rawChars.length * 1.6));
     colsRef.current = cols;
-    const rows = Math.ceil(chars.length / cols);
+    const rows = Math.ceil(rawChars.length / cols);
     canvas.width = cols * pixelSize;
     canvas.height = rows * pixelSize;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    chars.forEach((ch, i) => {
+    rawChars.forEach((ch, i) => {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const [r, g, b, a] = readingToColor(readings[i]);
       ctx.fillStyle = `rgba(${r},${g},${b},${a/255})`;
       ctx.fillRect(col * pixelSize, row * pixelSize, pixelSize, pixelSize);
     });
-    setInfo(`${chars.length} 文字 → ${cols}×${rows} px`);
-  }, [text, pixelSize, tokenizerReady]);
+    setInfo(`${rawChars.length} 文字 → ${cols}×${rows} px`);
+  }, [text, pixelSize, tokenizerStatus]);
 
   useEffect(() => { render(); }, [render]);
 
@@ -459,8 +440,6 @@ export default function App() {
       const ch = charsRef.current[idx];
       const reading = readingsRef.current[idx];
       const readingStr = reading ? reading.join("") : "";
-
-      // 読みの最初の文字で音韻情報を表示
       const firstPhoneme = reading && reading.length > 0 ? PHONEME_MAP[reading[0]] : null;
       if (firstPhoneme) {
         const placeLabel = firstPhoneme.place || "—";
@@ -489,8 +468,11 @@ export default function App() {
         <p>文字の音韻を多次元の色にマッピングする</p>
       </header>
       <main>
-        {!tokenizerReady && (
+        {tokenizerStatus === "loading" && (
           <div className="loading">辞書を読み込み中...</div>
+        )}
+        {tokenizerStatus === "failed" && (
+          <div className="loading">辞書の読み込みに失敗。ひらがな・カタカナのみ対応。</div>
         )}
         <textarea
           value={text}
@@ -520,7 +502,7 @@ export default function App() {
           <button className="save-btn" onClick={save}>PNG保存</button>
         </div>
         <div className="desc">
-          <p>共感覚・音象徴研究に基づき、母音が色の基調を決め、子音の性質が修飾します。漢字は形態素解析で読みを取得。</p>
+          <p>共感覚・音象徴研究に基づき、母音が色の基調を決め、子音の調音位置・方法が修飾します。漢字は形態素解析で読みを取得。</p>
         </div>
         <div className="legend">
           {LEGEND_ITEMS.map((group) => (
