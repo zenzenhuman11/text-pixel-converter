@@ -4,35 +4,35 @@ import "./App.css";
 /* ─── 研究ベースの音色マッピング ─── */
 
 // 母音 → 基調色 [H, S, L]
-// 研究知見: a=赤, i=明るい黄/白, u=暗い青, e=黄緑, o=暗い紺/黒
+// 研究知見ベース。明度を底上げしてクリーンに
 const VOWEL_COLORS = {
-  a: [0,    0.85, 0.55],  // 赤
-  i: [50,   0.80, 0.70],  // 明るい黄
-  u: [220,  0.70, 0.35],  // 暗い青
-  e: [95,   0.65, 0.50],  // 黄緑
-  o: [250,  0.50, 0.28],  // 暗い紺
+  a: [355,  0.82, 0.58],  // 澄んだ赤
+  i: [48,   0.78, 0.68],  // 暖かい黄
+  u: [215,  0.65, 0.52],  // 澄んだ青
+  e: [140,  0.55, 0.55],  // 緑
+  o: [265,  0.55, 0.48],  // 紫
 };
 
-// 調音位置 → 色相シフト (母音の基調色からどれだけずらすか)
+// 調音位置 → 色相シフト
 const PLACE_HUE_SHIFT = {
-  bilabial:      -20,  // 唇音: 暖色方向へ
-  alveolar:      +15,  // 歯茎音: やや冷色方向
-  postalveolar:  +35,  // 後部歯茎: さらに冷色
-  palatal:       +50,  // 硬口蓋: 大きくシフト
-  velar:         -35,  // 軟口蓋: 暖色方向に大きく
-  glottal:       +70,  // 声門: 大幅にシフト
-  vowel:         0,    // 純母音: シフトなし
+  bilabial:      -15,  // 唇音
+  alveolar:      +10,  // 歯茎音
+  postalveolar:  +25,  // 後部歯茎
+  palatal:       +40,  // 硬口蓋
+  velar:         -25,  // 軟口蓋
+  glottal:       +55,  // 声門
+  vowel:         0,
 };
 
 // 調音方法 → [彩度倍率, 明度シフト]
 const MANNER_MOD = {
-  stop:        [0.80, -0.06],  // 破裂音: くすんで暗い
-  affricate:   [0.75, -0.04],  // 破擦音
-  fricative:   [0.70, +0.06],  // 摩擦音: くすんで明るい
-  nasal:       [1.15, +0.10],  // 鼻音: 鮮やかで明るい
-  liquid:      [1.05, +0.07],  // 流音: やや鮮やか
-  glide:       [1.00, +0.04],  // 半母音: ほぼ母音
-  vowel:       [1.00, 0],      // 純母音
+  stop:        [0.90, -0.04],  // 破裂音: わずかに暗い
+  affricate:   [0.88, -0.02],  // 破擦音
+  fricative:   [0.85, +0.04],  // 摩擦音: やや明るい
+  nasal:       [1.10, +0.06],  // 鼻音: 鮮やか
+  liquid:      [1.05, +0.04],  // 流音
+  glide:       [1.00, +0.02],  // 半母音
+  vowel:       [1.00, 0],
 };
 
 // 五十音 → 音韻素性マッピング
@@ -262,60 +262,86 @@ function hslToRgb(h, s, l) {
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }
 
-function phonemeToColor(info) {
-  if (!info) return [80, 80, 80, 180];
+function phonemeToHSL(info) {
+  if (!info) return null;
+  if (info.special) return null;
 
-  // 特殊モーラ
-  if (info.special === "geminate") return [15, 15, 20, 255];
-  if (info.special === "moraic_nasal") return [...hslToRgb(30/360, 0.50, 0.42), 255];
-  if (info.special === "long") return [180, 185, 200, 100];
-
-  // 母音の基調色
   const vowelColor = info.vowel ? VOWEL_COLORS[info.vowel] : VOWEL_COLORS["a"];
   let [h, s, l] = vowelColor;
 
   // 調音位置で色相をシフト
-  const hueShift = PLACE_HUE_SHIFT[info.place] || 0;
-  h = ((h + hueShift) % 360 + 360) % 360;
+  h = ((h + (PLACE_HUE_SHIFT[info.place] || 0)) % 360 + 360) % 360;
 
   // 調音方法で彩度・明度を修飾
   const mod = MANNER_MOD[info.manner] || MANNER_MOD["vowel"];
-  s = Math.min(1, Math.max(0.15, s * mod[0]));
-  l = Math.min(0.85, Math.max(0.15, l + mod[1]));
+  s = Math.min(1, Math.max(0.20, s * mod[0]));
+  l = Math.min(0.80, Math.max(0.30, l + mod[1]));
 
-  // 有声/無声
+  // 有声/無声: 濁音はわずかに暗い程度に
   if (info.voiced && info.manner !== "vowel" && info.manner !== "glide" && info.manner !== "nasal") {
-    l = Math.max(0.15, l - 0.08);
-    s = Math.min(1, s * 0.85);
+    l = Math.max(0.30, l - 0.05);
   }
-  const alpha = info.voiced ? 255 : 210;
+  const alpha = info.voiced ? 255 : 215;
 
+  return [h, s, l, alpha];
+}
+
+function phonemeToColor(info) {
+  if (!info) return [80, 80, 80, 180];
+
+  // 特殊モーラ
+  if (info.special === "geminate") return [20, 20, 25, 255];
+  if (info.special === "moraic_nasal") return [...hslToRgb(25/360, 0.45, 0.50), 255];
+  if (info.special === "long") return [190, 195, 210, 120];
+
+  const hsl = phonemeToHSL(info);
+  if (!hsl) return [80, 80, 80, 180];
+  const [h, s, l, alpha] = hsl;
   return [...hslToRgb(h / 360, s, l), alpha];
 }
 
-// 読みの文字列（ひらがな配列）から色を決定
+// HSL空間で平均を取ることで、RGB平均のようなくすみを防ぐ
 function readingToColor(readingChars) {
   if (!readingChars || readingChars.length === 0) return [80, 80, 80, 180];
 
-  let totalR = 0, totalG = 0, totalB = 0, totalA = 0;
-  let count = 0;
-
+  const hslValues = [];
   for (const ch of readingChars) {
     const info = PHONEME_MAP[ch];
     if (info) {
-      const [r, g, b, a] = phonemeToColor(info);
-      totalR += r; totalG += g; totalB += b; totalA += a;
-      count++;
+      const hsl = phonemeToHSL(info);
+      if (hsl) {
+        hslValues.push(hsl);
+      } else {
+        // 特殊モーラ
+        const c = phonemeToColor(info);
+        return c;
+      }
     }
   }
 
-  if (count === 0) return [80, 80, 80, 180];
-  return [
-    Math.round(totalR / count),
-    Math.round(totalG / count),
-    Math.round(totalB / count),
-    Math.round(totalA / count),
-  ];
+  if (hslValues.length === 0) return [80, 80, 80, 180];
+  if (hslValues.length === 1) {
+    const [h, s, l, a] = hslValues[0];
+    return [...hslToRgb(h / 360, s, l), a];
+  }
+
+  // 色相は円周平均 (角度の平均)
+  let sinSum = 0, cosSum = 0, sSum = 0, lSum = 0, aSum = 0;
+  for (const [h, s, l, a] of hslValues) {
+    const rad = (h * Math.PI) / 180;
+    sinSum += Math.sin(rad);
+    cosSum += Math.cos(rad);
+    sSum += s;
+    lSum += l;
+    aSum += a;
+  }
+  const n = hslValues.length;
+  const avgH = ((Math.atan2(sinSum / n, cosSum / n) * 180) / Math.PI + 360) % 360;
+  const avgS = sSum / n;
+  const avgL = lSum / n;
+  const avgA = aSum / n;
+
+  return [...hslToRgb(avgH / 360, avgS, avgL), Math.round(avgA)];
 }
 
 /* ─── 凡例データ ─── */
